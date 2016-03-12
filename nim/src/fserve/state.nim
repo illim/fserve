@@ -28,16 +28,16 @@ proc processMessage(header : Header, body : string, player : Player) {.async.} =
         p.status = PlayerStatus(kind : Duelling, duel : duel)
         player.status = PlayerStatus(kind : Duelling, duel : duel)
         debug("send new game to " & $player.id)
-        result = player.socket.send($newHeader(NewGame))
+        result = player.socket.sendHeader(newHeader(NewGame))
       else :
         debug("send request failed to " & $player.id)
-        result = player.socket.send($newHeader(RequestFailed))
+        result = player.socket.sendHeader(newHeader(RequestFailed))
   of Proxy:
     let
       duel = player.status.duel
       otherPlayer = duel.getOtherPlayer(player)
     debug("proxying message from " & $player.id & " to " & $otherPlayer.id)
-    await otherPlayer.socket.send($header)
+    await otherPlayer.socket.sendHeader(header)
     result = otherPlayer.socket.send(body)
   of ExitDuel:
     let duel = player.status.duel
@@ -47,11 +47,28 @@ proc processMessage(header : Header, body : string, player : Player) {.async.} =
     warn("header not managed " & $header)
 
 proc processPlayer*(player : Player) {.async.} =
-  while true:
-    let
-      line = await player.socket.recvLine()
-      header = parseHeader(line)
-      body = if header.messageLength > 0: await player.socket.recv(header.messageLength) else:  ""
+  var running = true
+  let disconnect = proc() =
+    debug("Disconnected player " & $player.id)
+    for i, p in players:
+      if p.id == player.id:
+        players.del i
+    running = false
     
-    debug("receive message with header " & $header)
-    await processMessage(header, body, player)
+  while running:
+    let future = player.socket.recvLine()
+    let line = await future
+    debug("line " & line)
+    if future.error != nil or line == "" :
+      disconnect()
+    else :
+      let
+        header = parseHeader(future.read)
+        body = if header.messageLength > 0: await player.socket.recv(header.messageLength) else:  ""
+      
+      debug("receive message with header " & $header)
+      let msgFuture = processMessage(header, body, player)
+      if msgFuture.error != nil:
+        disconnect()
+      await msgFuture
+  

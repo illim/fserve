@@ -12,5 +12,5 @@ proc serve*() {.async.} =
   while true:
     let socket = await server.accept()
     let player = addPlayer(socket)
-    
+
     asyncCheck processPlayer(player)

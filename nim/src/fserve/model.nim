@@ -38,7 +38,7 @@ proc parseHeader*(message : string) : Header =
                   messageLength: parseInt(parts[1]))
   
 proc `$`*(header : Header) : string =
-  $header.messageType & ";" & $header.messageLength
+  $ord(header.messageType) & ";" & $header.messageLength
 
 proc newHeader*(messageType : MessageType, messageLength : int = 0) : Header =
   Header(messageType : messageType, messageLength : messageLength)
@@ -51,3 +51,6 @@ proc getOtherPlayer*(duel : Duel, player : Player) : Player =
     duel.player2
   else:
     duel.player1
+
+proc sendHeader*(socket : AsyncSocket, header : Header) :Future[void] {.async.}=
+  result = socket.send($header & "\n")
