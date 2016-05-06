@@ -1,4 +1,4 @@
-import asyncnet, asyncdispatch, math, strutils, parseutils, times, future
+import asyncnet, asyncdispatch, math, strutils, parseutils, times, future, base64, sequtils
 
 type
   PlayerStatusKind* = enum
@@ -10,38 +10,48 @@ type
     of Duelling: duel* : Duel
 
   Player* = ref object
-    id* : int
+    id*     : int
     socket* : AsyncSocket
     status* : PlayerStatus
+    name*   : string
   Duel* = ref object
     player1* : Player
     player2* : Player
 
   # Protocol model
   MessageType* = enum
+    Welcome
+    Name
     RequestDuel
     RequestFailed
     NewGame
     Proxy
     ExitDuel
+    ListPlayers
 
   Header* = ref object
-    messageType* : MessageType
+    messageType*   : MessageType
     messageLength* : int
+    messageId*     : int
+    answerId*      : int
 
-
-# header consists of 2 ints:  messageType;length
+# header consists of 2 ints:  messageType;length;id;answerid
 # todo use option when it will be fixed https://github.com/nim-lang/Nim/issues/3794    
 proc parseHeader*(message : string) : Header =
   let parts = message.split(';')
   Header(messageType: MessageType(parseInt(parts[0])),
-                  messageLength: parseInt(parts[1]))
+         messageLength: parseInt(parts[1]),
+         messageId : parseInt(parts[2]),
+         answerId : parseInt(parts[3]))
   
 proc `$`*(header : Header) : string =
-  $ord(header.messageType) & ";" & $header.messageLength
+  $ord(header.messageType) & ";" & $header.messageLength & ";" & $header.messageId & ";" & $header.answerId
 
-proc newHeader*(messageType : MessageType, messageLength : int = 0) : Header =
-  Header(messageType : messageType, messageLength : messageLength)
+proc playerListString*(players : seq[Player]) : string =
+  players.map(proc(p : Player) : string = encode(p.name)).join(";")  
+
+proc newHeader*(messageType : MessageType, messageLength : int = 0, messageId : int = 0, answerId : int = 0) : Header =
+  Header(messageType : messageType, messageLength : messageLength, messageId : messageId, answerId : answerId)
 
 proc newOnHoldStatus*() : PlayerStatus=
   PlayerStatus(kind: OnHold, time : getTime())
@@ -52,5 +62,17 @@ proc getOtherPlayer*(duel : Duel, player : Player) : Player =
   else:
     duel.player1
 
-proc sendHeader*(socket : AsyncSocket, header : Header) :Future[void] {.async.}=
+proc sendHeader(socket : AsyncSocket, header : Header) :Future[void] {.async.}=
   result = socket.send($header & "\n")
+
+proc sendMessage*(socket : AsyncSocket, header : Header, body : string = "") :Future[void] {.async.}=
+  header.messageLength = body.len
+  if body == "" :
+     result = socket.sendHeader(header)
+  else:
+     await socket.sendHeader(header)
+     result = socket.send(body)
+
+proc answer*(socket : AsyncSocket, srcHeader : Header, header : Header, body : string = "") :Future[void] {.async.}=
+  header.answerId = srcHeader.messageId
+  result = socket.sendMessage(header, body)

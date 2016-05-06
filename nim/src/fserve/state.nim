@@ -13,6 +13,13 @@ proc addPlayer*(socket : AsyncSocket) : Player =
   players.add player
   player
 
+
+proc broadcastListPlayers() {.async.} =
+  let playerList = playerListString(players)
+  debug("broadcast player list " & playerList)
+  for p in players:
+    await p.socket.sendMessage(newHeader(ListPlayers), playerList)
+
 proc processMessage(header : Header, body : string, player : Player) {.async.} =
   result = successful()
   case header.messageType
@@ -28,47 +35,54 @@ proc processMessage(header : Header, body : string, player : Player) {.async.} =
         p.status = PlayerStatus(kind : Duelling, duel : duel)
         player.status = PlayerStatus(kind : Duelling, duel : duel)
         debug("send new game to " & $player.id)
-        result = player.socket.sendHeader(newHeader(NewGame))
+        result = player.socket.answer(header, newHeader(NewGame))
       else :
         debug("send request failed to " & $player.id)
-        result = player.socket.sendHeader(newHeader(RequestFailed))
+        result = player.socket.answer(header, newHeader(RequestFailed))
   of Proxy:
     let
       duel = player.status.duel
       otherPlayer = duel.getOtherPlayer(player)
     debug("proxying message from " & $player.id & " to " & $otherPlayer.id)
-    await otherPlayer.socket.sendHeader(header)
-    result = otherPlayer.socket.send(body)
+    result = otherPlayer.socket.sendMessage(header, body)
   of ExitDuel:
     let duel = player.status.duel
     duel.player1.status = newOnHoldStatus()
     duel.player2.status = newOnHoldStatus()
+  of Name:
+    player.name = body
+    debug("set player name to " & body)
+    await broadcastListPlayers()
   else:
     warn("header not managed " & $header)
 
+proc disconnectPlayer(player : Player) {.async.} =
+  debug("Disconnected player " & $player.id)
+  for i, p in players:
+    if p.id == player.id:
+      players.del i
+  await broadcastListPlayers()
+
 proc processPlayer*(player : Player) {.async.} =
   var running = true
-  let disconnect = proc() =
-    debug("Disconnected player " & $player.id)
-    for i, p in players:
-      if p.id == player.id:
-        players.del i
-    running = false
+  await player.socket.sendMessage(newHeader(Welcome), "Welcome apprentice")
     
   while running:
     let future = player.socket.recvLine()
     let line = await future
     debug("line " & line)
     if future.error != nil or line == "" :
-      disconnect()
+      running = false
+      await disconnectPlayer(player)
     else :
       let
         header = parseHeader(future.read)
         body = if header.messageLength > 0: await player.socket.recv(header.messageLength) else:  ""
       
-      debug("receive message with header " & $header)
+      debug("receive message with header " & $header & " body " & $body)
       let msgFuture = processMessage(header, body, player)
       if msgFuture.error != nil:
-        disconnect()
+        running = false
+        await disconnectPlayer(player)
       await msgFuture
   

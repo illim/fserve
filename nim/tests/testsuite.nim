@@ -43,14 +43,14 @@ suite "scenarios":
     var sockptr = cast[ptr AsyncSocket](alloc0(sizeof(AsyncSocket)))
     defer:
       dealloc(sockptr)
-      sockptr[].close()      
+      sockptr[].close()
     spawn foreverClient(sockptr)
     let client = newAsyncSocket()
     defer: client.close()
     asyncCheck startClient(client)
    
     poll()
-    asyncCheck client.sendHeader(newHeader(RequestDuel))
+    asyncCheck client.sendMessage(newHeader(RequestDuel, messageId = 123))
     poll()
     
     sleep(1000)
