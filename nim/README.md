@@ -18,3 +18,15 @@ if none is found, send request failed (todo no player found or all busy or waiti
 
 other messages are proxy messages
 
+
+Run with
+
+```
+nim --threads:on c -r  src/main.nim
+```
+
+Run test with
+
+```
+nim --threads:on c -r  tests/testsuite.nim
+```

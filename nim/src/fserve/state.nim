@@ -46,7 +46,10 @@ proc processMessage(header : Header, body : string, player : Player) {.async.} =
     debug("proxying message from " & $player.id & " to " & $otherPlayer.id)
     result = otherPlayer.socket.sendMessage(header, body)
   of ExitDuel:
-    let duel = player.status.duel
+    let
+      duel = player.status.duel
+      otherPlayer = duel.getOtherPlayer(player)
+    discard otherPlayer.socket.sendMessage(header)
     duel.player1.status = newOnHoldStatus()
     duel.player2.status = newOnHoldStatus()
   of Name:
