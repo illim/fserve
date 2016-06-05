@@ -24,7 +24,7 @@ proc processMessage(header : Header, body : string, player : Player) {.async.} =
   result = successful()
   case header.messageType
   of RequestDuel:
-    let ps = players.filter( p => p.status.kind == OnHold )
+    let ps = players.filter( p => p.status.kind == OnHold and p.id != player.id )
     if player.status.kind != OnHold:
       warn("Already in duel " & $player.id)
     else:
@@ -82,7 +82,7 @@ proc processPlayer*(player : Player) {.async.} =
         header = parseHeader(future.read)
         body = if header.messageLength > 0: await player.socket.recv(header.messageLength) else:  ""
       
-      debug("receive message with header " & $header & " body " & $body)
+      debug("receive message with header " & $header)
       let msgFuture = processMessage(header, body, player)
       if msgFuture.error != nil:
         running = false
