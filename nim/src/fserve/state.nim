@@ -13,12 +13,14 @@ proc addPlayer*(socket : AsyncSocket) : Player =
   players.add player
   player
 
-
+proc broadcastMessage(header : Header, body : string) {.async.} =
+  for p in players:
+    await p.socket.sendMessage(header, body)
+    
 proc broadcastListPlayers() {.async.} =
   let playerList = playerListString(players)
   debug("broadcast player list " & playerList)
-  for p in players:
-    await p.socket.sendMessage(newHeader(ListPlayers), playerList)
+  await broadcastMessage(newHeader(ListPlayers), playerList)
 
 proc processMessage(header : Header, body : string, player : Player) {.async.} =
   result = successful()
@@ -40,11 +42,15 @@ proc processMessage(header : Header, body : string, player : Player) {.async.} =
         debug("send request failed to " & $player.id)
         result = player.socket.answer(header, newHeader(RequestFailed))
   of Proxy:
-    let
-      duel = player.status.duel
-      otherPlayer = duel.getOtherPlayer(player)
-    debug("proxying message from " & $player.id & " to " & $otherPlayer.id)
-    result = otherPlayer.socket.sendMessage(header, body)
+    case player.status.kind
+    of Duelling:
+      let
+        duel = player.status.duel
+        otherPlayer = duel.getOtherPlayer(player)
+      debug("proxying message from " & $player.id & " to " & $otherPlayer.id)
+      result = otherPlayer.socket.sendMessage(header, body)
+    of OnHold:
+      await broadcastMessage(header, body)
   of ExitDuel:
     let
       duel = player.status.duel
