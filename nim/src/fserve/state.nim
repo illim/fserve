@@ -16,10 +16,10 @@ proc addPlayer*(socket : AsyncSocket) : Player =
 proc broadcastMessage(header : Header, body : string) {.async.} =
   for p in players:
     await p.socket.sendMessage(header, body)
-    
-proc broadcastListPlayers() {.async.} =
-  let playerList = playerListString(players)
-  debug("broadcast player list " & playerList)
+
+  
+proc broadcastListPlayers(ps : seq[Player]) {.async.} =
+  let playerList = playerListString(ps)
   await broadcastMessage(newHeader(ListPlayers), playerList)
 
 proc processMessage(header : Header, body : string, player : Player) {.async.} =
@@ -32,11 +32,12 @@ proc processMessage(header : Header, body : string, player : Player) {.async.} =
     else:
       if ps.len > 0 :
         let
-          p = ps[randomInt(ps.len)]
+          p = ps[random(ps.len)]
           duel = Duel(player1 : player, player2 : p)
         p.status = PlayerStatus(kind : Duelling, duel : duel)
         player.status = PlayerStatus(kind : Duelling, duel : duel)
         debug("send new game to " & $player.id)
+        discard broadcastListPlayers(players.filter(proc (p: Player) : bool = p.status.kind == OnHold))
         result = player.socket.answer(header, newHeader(NewGame))
       else :
         debug("send request failed to " & $player.id)
@@ -60,17 +61,22 @@ proc processMessage(header : Header, body : string, player : Player) {.async.} =
     duel.player2.status = newOnHoldStatus()
   of Name:
     player.name = body
-    debug("set player name to " & body)
-    await broadcastListPlayers()
+    info("set name " & body)
+    await broadcastListPlayers(players)
+  of ListPlayers:
+    let playerList = playerListString(players)
+    result = player.socket.answer(header, newHeader(ListPlayers), playerList)
   else:
     warn("header not managed " & $header)
 
 proc disconnectPlayer(player : Player) {.async.} =
   debug("Disconnected player " & $player.id)
+  if player.status.kind == Duelling:
+    await player.status.duel.getOtherPlayer(player).socket.sendMessage(newHeader(ExitDuel))
   for i, p in players:
     if p.id == player.id:
       players.del i
-  await broadcastListPlayers()
+  await broadcastListPlayers(players)
 
 proc processPlayer*(player : Player) {.async.} =
   var running = true

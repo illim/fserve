@@ -47,8 +47,11 @@ proc parseHeader*(message : string) : Header =
 proc `$`*(header : Header) : string =
   $ord(header.messageType) & ";" & $header.messageLength & ";" & $header.messageId & ";" & $header.answerId
 
+proc playerString(p : Player) : string =
+  encode(p.name) & ":" & $ord(p.status.kind)
+
 proc playerListString*(players : seq[Player]) : string =
-  players.map(proc(p : Player) : string = encode(p.name)).join(";")  
+  players.map(playerString).join(";")
 
 proc newHeader*(messageType : MessageType, messageLength : int = 0, messageId : int = 0, answerId : int = 0) : Header =
   Header(messageType : messageType, messageLength : messageLength, messageId : messageId, answerId : answerId)
