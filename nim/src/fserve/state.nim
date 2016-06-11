@@ -1,8 +1,8 @@
-import asyncnet, asyncdispatch, math, options, strutils, parseutils, future, sequtils, logging
-import random
+import asyncnet, asyncdispatch, math, options, strutils, parseutils, future, sequtils, logging, random
 import util, model
 
 var players* {.threadvar.}: seq[Player]
+var requests* {.threadvar.} : seq[Request]
 
 # Create a player
 # give a random id
@@ -16,29 +16,57 @@ proc addPlayer*(socket : AsyncSocket) : Player =
 proc broadcastMessage(header : Header, body : string) {.async.} =
   for p in players:
     await p.socket.sendMessage(header, body)
-
   
 proc broadcastListPlayers(ps : seq[Player]) {.async.} =
   let playerList = playerListString(ps)
   await broadcastMessage(newHeader(ListPlayers), playerList)
 
+proc findPlayerOnHold(id : int) : Option[Player] =
+  for p in players:
+    if p.status.kind == OnHold and p.id == id:
+       return some(p)
+
+proc findRequest(id : int): Option[Request] =
+  for r in requests:
+    if r.srcId == id:
+      return some(r)
+
+proc purgeRequest(id : int) =
+  for i, r in requests:
+    if r.srcId == id or r.destId == id:
+      requests.del i
+
+  
 proc processMessage(header : Header, body : string, player : Player) {.async.} =
   result = successful()
   case header.messageType
-  of RequestDuel:
-    let ps = players.filter( p => p.status.kind == OnHold and p.id != player.id )
+  of RequestDuel:   
     if player.status.kind != OnHold:
       warn("Already in duel " & $player.id)
     else:
-      if ps.len > 0 :
+      let
+        reqIdOption = catchAll do -> int : parseInt(body)
+        pOption = reqIdOption.flatMap do (reqId : int) -> Option[Player] : findPlayerOnHold(reqId)
+      if pOption.isSome :
         let
-          p = ps[random(ps.len)]
-          duel = Duel(player1 : player, player2 : p)
-        p.status = PlayerStatus(kind : Duelling, duel : duel)
-        player.status = PlayerStatus(kind : Duelling, duel : duel)
-        debug("send new game to " & $player.id)
-        discard broadcastListPlayers(players.filter(proc (p: Player) : bool = p.status.kind == OnHold))
-        result = player.socket.answer(header, newHeader(NewGame))
+          p = pOption.get
+          reqOption = findRequest(p.id)
+        if reqOption.isSome:
+          let
+            request = reqOption.get
+            master  = random(@[player, p])
+            duel    = Duel(player1 : player, player2 : p)
+          p.status = PlayerStatus(kind : Duelling, duel : duel)
+          player.status = PlayerStatus(kind : Duelling, duel : duel)
+          purgeRequest(player.id)
+          purgeRequest(p.id)
+          debug("send new game to " & $player.id)
+          discard broadcastListPlayers(players.filter(proc (p: Player) : bool = p.status.kind == OnHold))
+          result = master.socket.sendMessage(newHeader(NewGame))
+        else:
+          let request = Request(srcId : player.id, destId : reqIdOption.get)
+          requests.add request
+          result = p.socket.sendMessage(newHeader(RequestDuel), $player.id)
       else :
         debug("send request failed to " & $player.id)
         result = player.socket.answer(header, newHeader(RequestFailed))
@@ -76,6 +104,7 @@ proc disconnectPlayer(player : Player) {.async.} =
   for i, p in players:
     if p.id == player.id:
       players.del i
+  purgeRequest(player.id)
   await broadcastListPlayers(players)
 
 proc processPlayer*(player : Player) {.async.} =

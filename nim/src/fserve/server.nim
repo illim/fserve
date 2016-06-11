@@ -4,6 +4,7 @@ import state
 proc serve*() {.async.} =
   let server = newAsyncSocket()
   players = @[]
+  requests = @[]
   let port = 12345
   server.bindAddr(Port(port))
   info("Listening to " & $port)

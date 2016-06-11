@@ -18,6 +18,10 @@ type
     player1* : Player
     player2* : Player
 
+  Request* = ref object
+    srcId* : int
+    destId* : int
+
   # Protocol model
   MessageType* = enum
     Welcome
@@ -36,7 +40,6 @@ type
     answerId*      : int
 
 # header consists of 2 ints:  messageType;length;id;answerid
-# todo use option when it will be fixed https://github.com/nim-lang/Nim/issues/3794    
 proc parseHeader*(message : string) : Header =
   let parts = message.split(';')
   Header(messageType: MessageType(parseInt(parts[0])),
@@ -48,7 +51,7 @@ proc `$`*(header : Header) : string =
   $ord(header.messageType) & ";" & $header.messageLength & ";" & $header.messageId & ";" & $header.answerId
 
 proc playerString(p : Player) : string =
-  encode(p.name) & ":" & $ord(p.status.kind)
+  encode(p.name) & ":" & $ord(p.status.kind) & ":" & $p.id
 
 proc playerListString*(players : seq[Player]) : string =
   players.map(playerString).join(";")

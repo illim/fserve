@@ -1,4 +1,4 @@
-FROM mdoboi/nim:v0.14.0
+FROM mdoboi/nim:v0.14
 
 COPY ./ /src/
 
