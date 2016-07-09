@@ -100,7 +100,9 @@ proc processMessage(header : Header, body : string, player : Player) {.async.} =
 proc disconnectPlayer(player : Player) {.async.} =
   debug("Disconnected player " & $player.id)
   if player.status.kind == Duelling:
-    await player.status.duel.getOtherPlayer(player).socket.sendMessage(newHeader(ExitDuel))
+    let otherPlayer = player.status.duel.getOtherPlayer(player)
+    otherPlayer.status = newOnHoldStatus()
+    await otherPlayer.socket.sendMessage(newHeader(ExitDuel))
   for i, p in players:
     if p.id == player.id:
       players.del i
