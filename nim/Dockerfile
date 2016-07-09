@@ -1,4 +1,4 @@
-FROM mdoboi/nim:v0.14
+FROM mdoboi/nim:v0.13
 
 ENV SUPERVISOR_VERSION=3.3.0
 
