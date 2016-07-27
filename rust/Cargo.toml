@@ -1,0 +1,10 @@
+[package]
+name = "fserve"
+version = "0.1.0"
+authors = ["illim <illminouche@gmail.com>"]
+
+[dependencies]
+mioco = "0.7.0"
+log = "0.3"
+env_logger = "0.3"
+rand = "0.3.14"
