@@ -4,7 +4,10 @@ version = "0.1.0"
 authors = ["illim <illminouche@gmail.com>"]
 
 [dependencies]
-mioco = "0.7.0"
+mioco = "0.8.0"
+mio = "0.5.1"
 log = "0.3"
 env_logger = "0.3"
 rand = "0.3.14"
+either = "0.1.6"
+base64 = "0.2.0"
