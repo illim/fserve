@@ -1,0 +1,13 @@
+language: rust
+rust:
+  - stable
+
+script: cd $TRAVIS_BUILD_DIR/rust && cargo build --release
+  
+deploy:
+  provider: releases
+  api_key: ${GITHUB_TOKEN}
+  file: target/release/fserve
+  skip_cleanup: true
+  on:
+    tags: true

@@ -1,6 +1,7 @@
 #![crate_name = "fserve"]
 
 extern crate either;
+#[macro_use] extern crate log;
 extern crate env_logger;
 extern crate mio;
 extern crate mioco;
@@ -10,6 +11,7 @@ extern crate base64;
 mod controller;
 mod model;
 mod state;
+mod utils;
 
 use either::*;
 use mio::tcp::TcpStream;
@@ -39,7 +41,7 @@ pub fn run_server() {
     let addr = listend_addr();
     let listener = try!(TcpListener::bind(&addr));
 
-    println!("Starting tcp server on {:?}", try!(listener.local_addr()));
+    info!("Starting tcp server on {:?}", try!(listener.local_addr()));
 
     loop {
       let mut conn = try!(listener.accept());
@@ -48,7 +50,6 @@ pub fn run_server() {
       let (tx, rx) = channel::<Arc<Message>>();
 
       mioco::spawn(move || -> io::Result<()> {
-        println!("spawn");
         let player = state::add_player(tx, &st);
         handle_read(&mut conn, st.clone(), player.clone())
       });
@@ -58,8 +59,8 @@ pub fn run_server() {
           let msg = rx.recv().unwrap().clone();
           let mut header = msg.header.to_string().into_bytes();
           header.push(b'\n');
-          conn2.write_all(&header).unwrap();
-          conn2.write_all(&msg.body).unwrap();
+          try!(conn2.write_all(&header));
+          try!(conn2.write_all(&msg.body));
         }
       });
     }
@@ -76,20 +77,29 @@ fn handle_read(
   loop {
     let size = try!(conn.read(&mut buf));
     if size == 0 {
-      println!("break: left {}", player.id);
+      info!("break: left {}", player.id);
       break;
     }
     let mut slice = &buf[0..size];
     loop {
       match message_builder.process(slice) {
-        Right((message, offset)) => {
-          controller::handle_msg(message, player.clone(), &server_state);
-          message_builder = MessageBuilder::new();
-          slice = &slice[offset..size];
+        Ok(processed) =>
+        match processed {
+          Right((message, offset)) => {
+            if let Err(err) = controller::handle_msg(message, player.clone(), &server_state) {
+              error!("Failed handling msg {}", err);
+            }
+            message_builder = MessageBuilder::new();
+            slice = &slice[offset..size];
+          },
+          Left(mb) => {
+            message_builder = mb;
+            break;
+          }
         },
-        Left(mb) => {
-          message_builder = mb;
-          break;
+        Err(err) => {
+          error!("Failed processing buffer {}", err);
+          message_builder = MessageBuilder::new();
         }
       }
     }

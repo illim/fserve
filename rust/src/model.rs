@@ -1,7 +1,9 @@
 use either::*;
+use std::error::Error;
 use std::str::{self, Utf8Error};
 use std::sync::{Arc, Mutex, RwLock};
 use mioco::sync::mpsc::Sender;
+use utils::*;
 
 pub type Id = u32;
 
@@ -13,7 +15,7 @@ pub struct Player {
 
 impl Player {
 
-  pub fn set_name(&self, name : String) -> bool {
+  pub fn set_name(&self, name : String) -> BasicResult<()> {
     self.update_state(move |state| {
       PlayerState {
         name : name,
@@ -22,7 +24,7 @@ impl Player {
     })
   }
 
-  pub fn set_status(&self, status : PlayerStatus) -> bool {
+  pub fn set_status(&self, status : PlayerStatus) -> BasicResult<()> {
     self.update_state(move |state| {
       PlayerState {
         name : state.name.to_owned(),
@@ -31,30 +33,23 @@ impl Player {
     })
   }
 
-  pub fn is_on_hold(&self) -> bool {
-    match self.state.read() {
-      Ok(state) => {
-        match state.status {
-          PlayerStatus::OnHold => true,
-          _ => false
-        }
-      },
+  pub fn is_on_hold(&self) -> BasicResult<bool> {
+    let state = try!(box_err(self.state.read()));
+    Ok(match state.status {
+      PlayerStatus::OnHold => true,
       _ => false
-    } 
+    })
   }
 
-  fn update_state<F>(&self, update : F) -> bool 
+  pub fn is_on_hold_unsafe(&self) -> bool {
+    self.is_on_hold().unwrap_or(false)
+  }
+
+  fn update_state<F>(&self, update : F) -> BasicResult<()> 
     where F : FnOnce(&PlayerState) -> PlayerState {
-    match self.state.write() {
-      Ok(mut st) => {
-        *Arc::make_mut(&mut st) = update(&st);
-        true
-      },
-      Err(e) => {
-        println!("Failed setting state caused by '{}'", e);
-        false
-      }
-    }
+    let mut st = try!(box_err(self.state.write()));
+    *Arc::make_mut(&mut st) = update(&st);
+    Ok(())
   }
 }
 
@@ -133,6 +128,17 @@ impl Header  {
   pub fn to_string(&self) -> String {
     format!("{};{};{};{}", self.message_type, self.message_length, self.message_id, self.answer_id)
   }
+
+  fn parse(s : &str) -> Result<Header, Box<Error>> {
+    let v : Vec<&str> = s.trim_matches('\n').split(";").collect();
+    Ok(
+      Header {
+        message_type   : try!(v[0].parse()),
+        message_length : try!(v[1].parse()),
+        message_id     : try!(v[2].parse()),
+        answer_id      : try!(v[3].parse())
+      })
+  }
 }
 
 pub struct Message {
@@ -176,16 +182,15 @@ impl MessageBuilder {
     }
   }
 
-  pub fn process(mut self, buf: &[u8]) -> Either<MessageBuilder, (Message, usize)> {
+  pub fn process(mut self, buf: &[u8]) -> Result<Either<MessageBuilder, (Message, usize)>, Box<Error>> {
     let nb_read = match self.header {
       Some(ref header) => MessageBuilder::process_body(&mut self.body, header, buf),
       None => {
         let line = MessageBuilder::get_line(buf);
-        let line_str = str::from_utf8(line).unwrap(); // FIXME
-        println!("line : [{}]", line_str);
+        let line_str = try!(str::from_utf8(line));
         self.header_line.push_str(line_str);
         if self.has_read_header() {
-          let header = MessageBuilder::parse_header(&self.header_line);
+          let header = try!(Header::parse(&self.header_line));
           let body_read = MessageBuilder::process_body(&mut self.body, &header, &buf[line.len() .. buf.len()]);
           self.header = Some(header);
           line.len() + body_read
@@ -195,21 +200,12 @@ impl MessageBuilder {
       }
     };
     if self.has_read_body() {
-      Right((Message { header : self.header.unwrap(), body : self.body }, nb_read))
+      Ok(Right((Message { header : self.header.unwrap(), body : self.body }, nb_read)))
     } else {
-      Left(self)
+      Ok(Left(self))
     }
   }
 
-  fn parse_header(s : &str) -> Header {
-    let v : Vec<&str> = s.trim_matches('\n').split(";").collect();
-    Header {
-      message_type   : v[0].parse().unwrap(),
-      message_length : v[1].parse().unwrap(),
-      message_id     : v[2].parse().unwrap(),
-      answer_id      : v[3].parse().unwrap()
-    }
-  }
 
   fn process_body(body : &mut Vec<u8>, header : &Header, buf: &[u8]) -> usize {
     if header.message_length == 0 {
