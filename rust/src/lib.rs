@@ -21,16 +21,18 @@ use mioco::sync::mpsc::channel;
 use std::sync::Arc;
 use std::net::SocketAddr;
 
+use std::env;
 use std::str::FromStr;
 use std::io::prelude::*;
 use std::io;
 use model::*;
 use state::State;
 
-const DEFAULT_LISTEN_ADDR : &'static str = "127.0.0.1:12345";
-
 fn listend_addr() -> SocketAddr {
-  FromStr::from_str(DEFAULT_LISTEN_ADDR).unwrap()
+  let port = env::args().nth(1).unwrap_or("12345".to_string());
+  let addr = format!("0.0.0.0:{}", &port); 
+
+  FromStr::from_str(&addr).unwrap()
 }
 
 pub fn run_server() {
@@ -51,6 +53,9 @@ pub fn run_server() {
 
       mioco::spawn(move || -> io::Result<()> {
         let player = state::add_player(tx, &st);
+        if let Err(err) = controller::send(Message::new(MessageType::Welcome, "Welcome apprentice"), &player) {
+          return Err(io::Error::new(io::ErrorKind::Other, format!("Failed sending welcome {}", err)));
+        }
         handle_read(&mut conn, st.clone(), player.clone())
       });
 

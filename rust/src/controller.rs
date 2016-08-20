@@ -57,8 +57,7 @@ pub fn handle_msg(msg : Message, player : Arc<Player>, server_state : &State) ->
     MessageType::Name => {
       let body = try!(msg.body_as_str());
       try!(player.set_name(body.to_string()));
-      info!("Set name {}", &body);
-      try!(send(Message::new(MessageType::Welcome, &format!("Welcome apprentice {}", &body)), &player))
+      info!("Set name {}", &body)
     },
     MessageType::ListPlayers => {
       let player_list = try!(player_list_string(server_state));
@@ -85,7 +84,7 @@ fn send_to_other(msg : Message, duel : &Duel, current : Id) -> BasicResult<()> {
   tx.send(Arc::new(msg)).map_err(From::from)
 }
 
-fn send(msg : Message, player : &Player) -> BasicResult<()> {
+pub fn send(msg : Message, player : &Player) -> BasicResult<()> {
   let tx = try!(box_err(player.tx.lock()));
   tx.send(Arc::new(msg)).map_err(From::from)
 }
