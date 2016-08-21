@@ -183,6 +183,7 @@ impl MessageBuilder {
   }
 
   pub fn process(mut self, buf: &[u8]) -> Result<Either<MessageBuilder, (Message, usize)>, Box<Error>> {
+    trace!("process buf {}", buf.len());
     let nb_read = match self.header {
       Some(ref header) => MessageBuilder::process_body(&mut self.body, header, buf),
       None => {
@@ -199,6 +200,7 @@ impl MessageBuilder {
         }
       }
     };
+    trace!("process had read {}", nb_read);
     if self.has_read_body() {
       Ok(Right((Message { header : self.header.unwrap(), body : self.body }, nb_read)))
     } else {
@@ -206,8 +208,8 @@ impl MessageBuilder {
     }
   }
 
-
   fn process_body(body : &mut Vec<u8>, header : &Header, buf: &[u8]) -> usize {
+    trace!("read body {}/{}", body.len() , header.message_length);
     if header.message_length == 0 {
       0
     } else {
@@ -226,6 +228,7 @@ impl MessageBuilder {
   }
 
   fn get_line(buf : &[u8]) -> & [u8] {
+    trace!("get line");
     let mut i = 0;
     if buf.len() == 0 {
       buf
@@ -243,9 +246,7 @@ impl MessageBuilder {
   
   fn has_read_body(&self) -> bool {
     match self.header {
-      Some(ref header) => {
-        header.message_length == self.body.len()
-      },
+      Some(ref header) => header.message_length == self.body.len(),
       _ => false
     }
   }

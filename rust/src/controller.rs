@@ -6,7 +6,7 @@ use state::*;
 use utils::*;
 
 pub fn handle_msg(msg : Message, player : Arc<Player>, server_state : &State) -> BasicResult<()> {
-  debug!("msg type {}", msg.header.message_type);
+  debug!("msg type {} -> {}", msg.header.message_type, player.id);
   match msg.header.message_type {
     MessageType::RequestDuel => {
       if try!(player.is_on_hold()) {
@@ -21,18 +21,15 @@ pub fn handle_msg(msg : Message, player : Arc<Player>, server_state : &State) ->
               // !! this would not be safe if it happens on different threads
               try!(player.set_status(PlayerStatus::Duelling(duel.clone())));
               try!(other_player.set_status(PlayerStatus::Duelling(duel)));
-              purge_request(player.id, server_state);
-              purge_request(other_player.id, server_state);
+              try!(purge_request(player.id, server_state));
+              try!(purge_request(other_player.id, server_state));
               let mut rng = thread_rng();
               let master = sample(&mut rng, vec![player, other_player], 1).pop().unwrap();
               try!(send(Message::new(MessageType::NewGame, ""), &master));
-              let players = try!(box_err(server_state.players.read()));
-              let p = try!(player_list_string(server_state));
-              let players_on_hold :Vec<Arc<Player>> = players.iter().filter(|p| p.is_on_hold_unsafe()).map(|p| p.clone()).collect();
-              try!(broadcast(Message::new(MessageType::ListPlayers, &p), &players_on_hold));
+              try!(broadcast_list_to_onhold(&server_state));
             } else {
               add_request(Request{src_id : player.id, dest_id : other_player.id}, &server_state);
-              try!(send(Message::new(MessageType::RequestDuel, ""), &other_player));
+              try!(send(Message::new(MessageType::RequestDuel, &player.id.to_string()), &other_player));
             }
           },
           None => {
@@ -57,25 +54,39 @@ pub fn handle_msg(msg : Message, player : Arc<Player>, server_state : &State) ->
     MessageType::Name => {
       let body = try!(msg.body_as_str());
       try!(player.set_name(body.to_string()));
-      info!("Set name {}", &body)
+      info!("Set name {} to {}", &body, player.id);
+      try!(broadcast_list_to_onhold(&server_state));
     },
     MessageType::ListPlayers => {
       let player_list = try!(player_list_string(server_state));
       try!(answer(Message::new(MessageType::ListPlayers, &player_list), &player, msg))
     },
     MessageType::ExitDuel => {
-      let state = try!(box_err(player.state.read()));
-      if let PlayerStatus::Duelling(ref duel) = state.status {
-        let other_player = duel.other_player(player.id);
-        info!("Exit duel {} -> {}", player.id, other_player.id);
-        try!(player.set_status(PlayerStatus::OnHold));
-        try!(other_player.set_status(PlayerStatus::OnHold));
-        try!(send_to_other(msg, duel, player.id));
-      }
+      try!(exit_duel(&player));
+      try!(broadcast_list_to_onhold(server_state))
     },
     _ => return Err(From::from(format!("Not managed msg type {}", msg.header.message_type)))
   }
   Ok(())
+}
+
+fn exit_duel(player : &Player) -> BasicResult<()> {
+  if let Some(other_player) = try!(find_duel_other_player(player)) {
+    try!(player.set_status(PlayerStatus::OnHold));
+    try!(other_player.set_status(PlayerStatus::OnHold));
+    try!(send(Message::new(MessageType::ExitDuel, ""), &other_player));
+    info!("Exit duel {} -> {}", player.id, other_player.id);
+  }
+  Ok(())
+}
+
+fn find_duel_other_player(player : &Player) -> BasicResult<Option<Arc<Player>>> {
+  let player_state = try!(box_err(player.state.read()));
+  if let PlayerStatus::Duelling(ref duel) = player_state.status {
+    Ok(Some(duel.other_player(player.id)))
+  } else {
+    Ok(None)
+  }
 }
 
 fn send_to_other(msg : Message, duel : &Duel, current : Id) -> BasicResult<()> {
@@ -98,6 +109,35 @@ fn answer(msg : Message, player : &Player, request : Message) -> BasicResult<()>
     }, .. msg
   };
   tx.send(Arc::new(answer)).map_err(From::from)
+}
+
+pub fn release_player(player : &Player, server_state : &State) -> BasicResult<()> {
+  try!(exit_duel(player));
+  match server_state.players.write() {
+    Ok(mut players) => {
+      match players.iter().position(|p| p.id == player.id) {
+        Some(i) => {
+          players.remove(i);
+          info!("Remove player {}", player.id);
+        },
+        None => warn!("Failed to find and remove player {}", player.id)
+      }
+    },
+    _ => error!("Failed to remove player {}", player.id)
+  }
+  try!(purge_request(player.id, server_state));
+  broadcast_list_to_onhold(server_state)
+}
+
+fn broadcast_list_to_onhold(server_state: &State) -> BasicResult<()> {
+  let p = try!(player_list_string(server_state));
+  broadcast_to_onhold(Message::new(MessageType::ListPlayers, &p), &server_state)
+}
+
+fn broadcast_to_onhold(msg : Message, server_state: &State) -> BasicResult<()> {
+  let players = try!(box_err(server_state.players.read()));
+  let players_on_hold :Vec<Arc<Player>> = players.iter().filter(|p| p.is_on_hold_unsafe()).map(|p| p.clone()).collect();
+  broadcast(msg, &players_on_hold)
 }
 
 pub fn broadcast(msg : Message, players : &Vec<Arc<Player>>) -> BasicResult<()> {

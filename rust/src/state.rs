@@ -58,12 +58,12 @@ pub fn has_request(id : Id, state : &State) -> bool {
   })
 }
 
-pub fn purge_request(id : Id, state : &State) {
-  if let Ok(mut requests) = state.requests.write() {
-    requests.retain( |req| {
-      req.src_id != id && req.dest_id != id 
-    })
-  }
+pub fn purge_request(id : Id, state : &State) -> BasicResult<()>{
+  let mut requests = try!(box_err(state.requests.write()));
+  requests.retain( |req| {
+    req.src_id != id && req.dest_id != id 
+  });
+  Ok(())
 }
 
 pub fn find_player_on_hold(id : Id, state : &State) -> Option<Arc<Player>> {
