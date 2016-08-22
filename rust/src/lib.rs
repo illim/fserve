@@ -4,7 +4,7 @@ extern crate either;
 #[macro_use] extern crate log;
 extern crate env_logger;
 extern crate mio;
-extern crate mioco;
+#[macro_use] extern crate mioco;
 extern crate rand;
 extern crate base64;
 
@@ -72,7 +72,6 @@ fn start_listen(handler_tx : Arc<Mutex<Sender<HandlerParam>>>) {
 
     loop {
       let mut conn = try!(listener.accept());
-      let mut conn2 = try!(conn.try_clone());
       let handler_tx = handler_tx.clone();
       let (tx, rx) = channel::<Arc<Message>>();
 
@@ -82,16 +81,26 @@ fn start_listen(handler_tx : Arc<Mutex<Sender<HandlerParam>>>) {
         if let Err(err) = controller::send(Arc::new(Message::new(MessageType::Welcome, "Welcome apprentice")), &player) {
           return Err(io_err(&format!("Failed sending welcome {}", err)));
         }
-        let res = handle_read(&mut conn, player.clone(), &handler_tx);
-        debug!("release handler coroutine");
-        res
+
+        let mut message_builder = MessageBuilder::new();
+        let mut buf = [0u8; 1024];
+        loop {
+          select!(
+            r:conn => {
+              match try!(handle_read(&mut conn, &mut buf, message_builder, player.clone(), &handler_tx)) {
+                Some(mb) => message_builder = mb,
+                None => break
+              }
+            },
+            r:rx => {
+              try!(handle_write(&mut conn, &rx));
+            },
+          );
+        }
+        debug!("leaving coroutine");
+        Ok(())
       });
 
-      mioco::spawn(move || -> io::Result<()> {
-        let res = handle_write(&mut conn2, &rx);
-        debug!("release out coroutine");
-        res
-      });
     }
   }).unwrap().unwrap();
 }
@@ -103,56 +112,52 @@ fn add_player(player : Arc<Player>,
 }
 
 fn handle_write(conn : &mut MioAdapter<TcpStream>, rx: &Receiver<Arc<Message>>) -> io::Result<()> {
-  loop {
-    let msg = try!(map_io_err(rx.recv()));
-    let mut header = msg.header.to_string().into_bytes();
-    header.push(b'\n');
-    try!(conn.write_all(&header));
-    try!(conn.write_all(&msg.body));
-    debug!("Sent {:?}", msg.header);
-  }
+  let msg = try!(map_io_err(rx.recv()));
+  let mut header = msg.header.to_string().into_bytes();
+  header.push(b'\n');
+  try!(conn.write_all(&header));
+  try!(conn.write_all(&msg.body));
+  debug!("Sent {:?}", msg.header);
+  Ok(())
 }
 
 fn handle_read(
   conn : &mut MioAdapter<TcpStream>,
+  mut buf : &mut [u8],
+  mut message_builder : MessageBuilder,
   player : Arc<Player>,
-  handler_tx : &Mutex<Sender<HandlerParam>>) -> io::Result<()> {
-  let mut message_builder = MessageBuilder::new();
-  let mut buf = [0u8; 1024];
-
+  handler_tx : &Mutex<Sender<HandlerParam>>) -> io::Result<Option<MessageBuilder>> {
+  let size = try!(conn.read(&mut buf));
+  if size == 0 {
+    info!("Left {}", player.id);
+    let tx = try!(map_io_err(handler_tx.lock()));
+    try!(map_io_err(tx.send((HandlerMessage::ReleasePlayer, player.clone()))));
+    return Ok(None);
+  }
+  let mut slice = &buf[0..size];
   loop {
-    let size = try!(conn.read(&mut buf));
-    if size == 0 {
-      info!("break: left {}", player.id);
-      let tx = try!(map_io_err(handler_tx.lock()));
-      try!(map_io_err(tx.send((HandlerMessage::ReleasePlayer, player.clone()))));
-      break;
-    }
-    let mut slice = &buf[0..size];
-    loop {
-      match message_builder.process(slice) {
-        Ok(processed) =>
-          match processed {
-            Right((message, offset)) => {
-              message_builder = MessageBuilder::new();
-              trace!("message found {}, remaining {}", offset, slice.len());
-              slice = try!(check_slice(&slice, offset, slice.len()));
-              let tx = try!(map_io_err(handler_tx.lock()));
-              try!(map_io_err(tx.send((HandlerMessage::ClientMessage(Arc::new(message)), player.clone()))));
-            },
-            Left(mb) => {
-              trace!("process no message continuing..");
-              message_builder = mb;
-              break;
-            }
+    match message_builder.process(slice) {
+      Ok(processed) =>
+        match processed {
+          Right((message, offset)) => {
+            message_builder = MessageBuilder::new();
+            trace!("message found {}, remaining {}", offset, slice.len());
+            slice = try!(check_slice(&slice, offset, slice.len()));
+            let tx = try!(map_io_err(handler_tx.lock()));
+            try!(map_io_err(tx.send((HandlerMessage::ClientMessage(Arc::new(message)), player.clone()))));
           },
-        Err(err) => {
-          error!("Failed processing buffer {}", err);
-          message_builder = MessageBuilder::new();
-          break;
-        }
+          Left(mb) => {
+            trace!("process no message continuing..");
+            message_builder = mb;
+            break;
+          }
+        },
+      Err(err) => {
+        error!("Failed processing buffer {}", err);
+        message_builder = MessageBuilder::new();
+        break;
       }
     }
   }
-  Ok(())
+  Ok(Some(message_builder))
 }
