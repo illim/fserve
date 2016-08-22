@@ -5,7 +5,7 @@ use model::*;
 use state::*;
 use utils::*;
 
-pub fn handle_msg(msg : Message, player : Arc<Player>, server_state : &State) -> BasicResult<()> {
+pub fn handle_msg(msg : Arc<Message>, player : Arc<Player>, server_state : &State) -> BasicResult<()> {
   debug!("msg type {} -> {}", msg.header.message_type, player.id);
   match msg.header.message_type {
     MessageType::RequestDuel => {
@@ -25,16 +25,16 @@ pub fn handle_msg(msg : Message, player : Arc<Player>, server_state : &State) ->
               try!(purge_request(other_player.id, server_state));
               let mut rng = thread_rng();
               let master = sample(&mut rng, vec![player, other_player], 1).pop().unwrap();
-              try!(send(Message::new(MessageType::NewGame, ""), &master));
+              try!(send(Arc::new(Message::new(MessageType::NewGame, "")), &master));
               try!(broadcast_list_to_onhold(&server_state));
             } else {
               add_request(Request{src_id : player.id, dest_id : other_player.id}, &server_state);
-              try!(send(Message::new(MessageType::RequestDuel, &player.id.to_string()), &other_player));
+              try!(send(Arc::new(Message::new(MessageType::RequestDuel, &player.id.to_string())), &other_player));
             }
           },
           None => {
             warn!("Not found player requested {}", req_id);
-            try!(send(Message::new(MessageType::RequestFailed, ""), &player));
+            try!(send(Arc::new(Message::new(MessageType::RequestFailed, "")), &player));
           }
         }
       } else {
@@ -74,7 +74,7 @@ fn exit_duel(player : &Player) -> BasicResult<()> {
   if let Some(other_player) = try!(find_duel_other_player(player)) {
     try!(player.set_status(PlayerStatus::OnHold));
     try!(other_player.set_status(PlayerStatus::OnHold));
-    try!(send(Message::new(MessageType::ExitDuel, ""), &other_player));
+    try!(send(Arc::new(Message::new(MessageType::ExitDuel, "")), &other_player));
     info!("Exit duel {} -> {}", player.id, other_player.id);
   }
   Ok(())
@@ -89,18 +89,18 @@ fn find_duel_other_player(player : &Player) -> BasicResult<Option<Arc<Player>>> 
   }
 }
 
-fn send_to_other(msg : Message, duel : &Duel, current : Id) -> BasicResult<()> {
+fn send_to_other(msg : Arc<Message>, duel : &Duel, current : Id) -> BasicResult<()> {
   let other_player = duel.other_player(current);
   let tx = try!(box_err(other_player.tx.lock()));
-  tx.send(Arc::new(msg)).map_err(From::from)
+  tx.send(msg).map_err(From::from)
 }
 
-pub fn send(msg : Message, player : &Player) -> BasicResult<()> {
+pub fn send(msg : Arc<Message>, player : &Player) -> BasicResult<()> {
   let tx = try!(box_err(player.tx.lock()));
-  tx.send(Arc::new(msg)).map_err(From::from)
+  tx.send(msg).map_err(From::from)
 }
 
-fn answer(msg : Message, player : &Player, request : Message) -> BasicResult<()> {
+fn answer(msg : Message, player : &Player, request : Arc<Message>) -> BasicResult<()> {
   let tx= try!(box_err(player.tx.lock()));
   let answer = Message{
     header : Header {
@@ -112,7 +112,6 @@ fn answer(msg : Message, player : &Player, request : Message) -> BasicResult<()>
 }
 
 pub fn release_player(player : &Player, server_state : &State) -> BasicResult<()> {
-  try!(exit_duel(player));
   match server_state.players.write() {
     Ok(mut players) => {
       match players.iter().position(|p| p.id == player.id) {
@@ -125,26 +124,26 @@ pub fn release_player(player : &Player, server_state : &State) -> BasicResult<()
     },
     _ => error!("Failed to remove player {}", player.id)
   }
+  try!(exit_duel(player));
   try!(purge_request(player.id, server_state));
   broadcast_list_to_onhold(server_state)
 }
 
 fn broadcast_list_to_onhold(server_state: &State) -> BasicResult<()> {
   let p = try!(player_list_string(server_state));
-  broadcast_to_onhold(Message::new(MessageType::ListPlayers, &p), &server_state)
+  broadcast_to_onhold(Arc::new(Message::new(MessageType::ListPlayers, &p)), &server_state)
 }
 
-fn broadcast_to_onhold(msg : Message, server_state: &State) -> BasicResult<()> {
+fn broadcast_to_onhold(msg : Arc<Message>, server_state: &State) -> BasicResult<()> {
   let players = try!(box_err(server_state.players.read()));
   let players_on_hold :Vec<Arc<Player>> = players.iter().filter(|p| p.is_on_hold_unsafe()).map(|p| p.clone()).collect();
   broadcast(msg, &players_on_hold)
 }
 
-pub fn broadcast(msg : Message, players : &Vec<Arc<Player>>) -> BasicResult<()> {
-  let shared_msg = Arc::new(msg);
+pub fn broadcast(msg : Arc<Message>, players : &Vec<Arc<Player>>) -> BasicResult<()> {
   for player in players.iter() {
     let tx = try!(box_err(player.tx.lock()));
-    try!(tx.send(shared_msg.clone()));
+    try!(tx.send(msg.clone()));
   }
   Ok(())
 }

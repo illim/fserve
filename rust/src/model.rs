@@ -1,7 +1,8 @@
 use either::*;
 use std::error::Error;
 use std::str::{self, Utf8Error};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
+use mioco::sync::{Mutex, RwLock};
 use mioco::sync::mpsc::Sender;
 use utils::*;
 
@@ -116,6 +117,7 @@ pub mod MessageType {
   pub const ListPlayers  : Value = 7;
 }
 
+#[derive(Debug)]
 pub struct Header {
   pub message_type   : MessageType::Value,
   pub message_length : usize,
@@ -192,6 +194,7 @@ impl MessageBuilder {
         self.header_line.push_str(line_str);
         if self.has_read_header() {
           let header = try!(Header::parse(&self.header_line));
+          trace!("Header read : {:?}", header);
           let body_read = MessageBuilder::process_body(&mut self.body, &header, &buf[line.len() .. buf.len()]);
           self.header = Some(header);
           line.len() + body_read

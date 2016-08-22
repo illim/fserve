@@ -17,7 +17,8 @@ use either::*;
 use mio::tcp::TcpStream;
 use mioco::tcp::TcpListener;
 use mioco::MioAdapter;
-use mioco::sync::mpsc::{channel, Receiver};
+use mioco::sync::Mutex;
+use mioco::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::net::SocketAddr;
 
@@ -25,9 +26,12 @@ use std::env;
 use std::str::FromStr;
 use std::io::prelude::*;
 use std::io;
+use std::thread;
 use model::*;
 use state::State;
 use utils::*;
+
+type HandlerParam = (Arc<Message>, Arc<Player>);
 
 fn listend_addr() -> SocketAddr {
   let port = env::args().nth(1).unwrap_or("12345".to_string());
@@ -38,9 +42,29 @@ fn listend_addr() -> SocketAddr {
 
 pub fn run_server() {
   env_logger::init().unwrap();
+  let server_state = Arc::new(State::new());
+  let (handler_tx, handler_rx) = channel::<HandlerParam>();
 
-  mioco::start_threads(1, || -> io::Result<()> {
-    let server_state = Arc::new(State::new());
+  start_handler(handler_rx, server_state.clone());
+  start_listen(Arc::new(Mutex::new(handler_tx)), server_state);
+}
+
+fn start_handler(handler_rx : Receiver<HandlerParam>, server_state : Arc<State>) {
+  thread::spawn(move|| {
+    info!("Start handler");
+    mioco::start_threads(1, move || -> io::Result<()> {
+      loop {
+        let (message, player) = try!(map_io_err(handler_rx.recv()));
+        if let Err(err) = controller::handle_msg(message, player, &server_state) {
+          error!("Failed handling msg {}", err);
+        }
+      }
+    }).unwrap().unwrap();
+  });
+}
+
+fn start_listen(handler_tx : Arc<Mutex<Sender<HandlerParam>>>, server_state : Arc<State>) {
+  mioco::start(move || -> io::Result<()> {
     let addr = listend_addr();
     let listener = try!(TcpListener::bind(&addr));
 
@@ -50,14 +74,15 @@ pub fn run_server() {
       let mut conn = try!(listener.accept());
       let mut conn2 = try!(conn.try_clone());
       let st = server_state.clone();
+      let handler_tx = handler_tx.clone();
       let (tx, rx) = channel::<Arc<Message>>();
 
       mioco::spawn(move || -> io::Result<()> {
         let player = state::add_player(tx, &st);
-        if let Err(err) = controller::send(Message::new(MessageType::Welcome, "Welcome apprentice"), &player) {
+        if let Err(err) = controller::send(Arc::new(Message::new(MessageType::Welcome, "Welcome apprentice")), &player) {
           return Err(io_err(&format!("Failed sending welcome {}", err)));
         }
-        let res = handle_read(&mut conn, st.clone(), player.clone());
+        let res = handle_read(&mut conn, st.clone(), player.clone(), handler_tx);
         debug!("release handler coroutine");
         res
       });
@@ -73,19 +98,20 @@ pub fn run_server() {
 
 fn handle_write(conn : &mut MioAdapter<TcpStream>, rx: &Receiver<Arc<Message>>) -> io::Result<()> {
   loop {
-    let msg = try!(rx.recv().map_err(|e| io_err(&e.to_string()))).clone();
+    let msg = try!(map_io_err(rx.recv()));
     let mut header = msg.header.to_string().into_bytes();
     header.push(b'\n');
     try!(conn.write_all(&header));
     try!(conn.write_all(&msg.body));
-    debug!("Sent {}", msg.header.message_type);
+    debug!("Sent {:?}", msg.header);
   }
 }
 
 fn handle_read(
   conn : &mut MioAdapter<TcpStream>,
   server_state : Arc<State>,
-  player : Arc<Player>) -> io::Result<()> {
+  player : Arc<Player>,
+  handler_tx : Arc<Mutex<Sender<HandlerParam>>>) -> io::Result<()> {
   let mut message_builder = MessageBuilder::new();
   let mut buf = [0u8; 1024];
 
@@ -107,9 +133,8 @@ fn handle_read(
               message_builder = MessageBuilder::new();
               trace!("message found {}, remaining {}", offset, slice.len());
               slice = &slice[offset..slice.len()];
-              if let Err(err) = controller::handle_msg(message, player.clone(), &server_state) {
-                error!("Failed handling msg {}", err);
-              }
+              let tx = try!(map_io_err(handler_tx.lock()));
+              try!(map_io_err(tx.send((Arc::new(message), player.clone()))));
             },
             Left(mb) => {
               trace!("process no message continuing..");

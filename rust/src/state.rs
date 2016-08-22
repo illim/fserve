@@ -1,5 +1,6 @@
-use std::sync::{Arc, Mutex, RwLock};
+use mioco::sync::{Mutex, RwLock};
 use mioco::sync::mpsc::Sender;
+use std::sync::Arc;
 use base64::encode;
 
 use rand;

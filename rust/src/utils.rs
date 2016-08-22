@@ -11,3 +11,7 @@ pub fn box_err<A, B : Display>(x : Result<A, B>) -> BasicResult<A> {
 pub fn io_err(message : &str) -> io::Error {
   io::Error::new(io::ErrorKind::Other, message)
 }
+
+pub fn map_io_err<A, B : Display>(x : Result<A, B>) -> Result<A, io::Error> {
+  x.map_err(|err| io_err(&err.to_string()))
+}
