@@ -1,83 +1,50 @@
-use mioco::sync::{Mutex, RwLock};
-use mioco::sync::mpsc::Sender;
 use std::sync::Arc;
 use base64::encode;
 
-use rand;
 use model::*;
 use utils::*;
 
 type Players = Vec<Player>;
 
 pub struct State {
-  pub players  : RwLock<Vec<Arc<Player>>>,
-  pub requests : RwLock<Vec<Request>>
+  pub players  : Vec<Arc<Player>>,
+  pub requests : Vec<Request>
 }
 
 impl State {
+
   pub fn new() -> State {
     State {
-      players  : RwLock::new(Vec::new()),
-      requests : RwLock::new(Vec::new())
+      players  : Vec::new(),
+      requests : Vec::new()
     }
   }
-}
 
-pub fn add_player(tx : Sender<Arc<Message>>, state : &State) -> Arc<Player> {
-  let player = Arc::new(
-    Player {
-      id    : rand::random(),
-      tx    : Mutex::new(tx),
-      state : RwLock::new(Arc::new(
-        PlayerState{
-          status : PlayerStatus::OnHold,
-          name   : String::new()
-        }))
-    });
-  match state.players.write() {
-    Ok(mut data) => {
-      (*data).push(player.clone());
-      info!("Added player {}", player.id)
-    },
-    _ => error!("Failed to add player")
+  pub fn add_request(&mut self, request : Request) {
+    self.requests.push(request);
   }
-  player
-}
 
-
-pub fn add_request(request : Request, state : &State) {
-  if let Ok(mut requests) = state.requests.write() {
-    requests.push(request);
-  }
-}
-
-pub fn has_request(id : Id, state : &State) -> bool {
-  state.requests.read().iter().any(|requests| { 
-    requests.iter().any( |r| { 
+  pub fn has_request(&self, id : Id) -> bool {
+    self.requests.iter().any( |r| { 
       r.src_id == id
     })
-  })
-}
+  }
 
-pub fn purge_request(id : Id, state : &State) -> BasicResult<()>{
-  let mut requests = try!(box_err(state.requests.write()));
-  requests.retain( |req| {
-    req.src_id != id && req.dest_id != id 
-  });
-  Ok(())
+  pub fn purge_request(&mut self, id : Id) {
+    self.requests.retain( |req| {
+      req.src_id != id && req.dest_id != id 
+    });
+  }
 }
 
 pub fn find_player_on_hold(id : Id, state : &State) -> Option<Arc<Player>> {
-  state.players.read().iter().flat_map( |players| {
-    players.iter()
-      .find(|&p| { p.id == id && p.is_on_hold_unsafe() })
-      .map(|p| p.clone())
-  }).last()
+  state.players.iter()
+    .find(|&p| { p.id == id && p.is_on_hold_unsafe() })
+    .map(|p| p.clone())
 }
 
 pub fn player_list_string(state : &State) -> BasicResult<String> {
-  let players = try!(box_err(state.players.read()));
-  let player_strings : Vec<String> = players.iter()
+  let player_strings : Vec<String> = state.players.iter()
     .filter_map(|player| {
       match player_string(&player) { // FIXME
         Ok(name) => name,

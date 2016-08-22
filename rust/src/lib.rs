@@ -31,7 +31,7 @@ use model::*;
 use state::State;
 use utils::*;
 
-type HandlerParam = (Arc<Message>, Arc<Player>);
+type HandlerParam = (HandlerMessage, Arc<Player>);
 
 fn listend_addr() -> SocketAddr {
   let port = env::args().nth(1).unwrap_or("12345".to_string());
@@ -42,20 +42,20 @@ fn listend_addr() -> SocketAddr {
 
 pub fn run_server() {
   env_logger::init().unwrap();
-  let server_state = Arc::new(State::new());
   let (handler_tx, handler_rx) = channel::<HandlerParam>();
 
-  start_handler(handler_rx, server_state.clone());
-  start_listen(Arc::new(Mutex::new(handler_tx)), server_state);
+  start_handler(handler_rx);
+  start_listen(Arc::new(Mutex::new(handler_tx)));
 }
 
-fn start_handler(handler_rx : Receiver<HandlerParam>, server_state : Arc<State>) {
+fn start_handler(handler_rx : Receiver<HandlerParam>) {
   thread::spawn(move|| {
     info!("Start handler");
     mioco::start_threads(1, move || -> io::Result<()> {
+      let mut server_state = State::new();
       loop {
         let (message, player) = try!(map_io_err(handler_rx.recv()));
-        if let Err(err) = controller::handle_msg(message, player, &server_state) {
+        if let Err(err) = controller::handle_msg(message, player, &mut server_state) {
           error!("Failed handling msg {}", err);
         }
       }
@@ -63,7 +63,7 @@ fn start_handler(handler_rx : Receiver<HandlerParam>, server_state : Arc<State>)
   });
 }
 
-fn start_listen(handler_tx : Arc<Mutex<Sender<HandlerParam>>>, server_state : Arc<State>) {
+fn start_listen(handler_tx : Arc<Mutex<Sender<HandlerParam>>>) {
   mioco::start(move || -> io::Result<()> {
     let addr = listend_addr();
     let listener = try!(TcpListener::bind(&addr));
@@ -73,16 +73,16 @@ fn start_listen(handler_tx : Arc<Mutex<Sender<HandlerParam>>>, server_state : Ar
     loop {
       let mut conn = try!(listener.accept());
       let mut conn2 = try!(conn.try_clone());
-      let st = server_state.clone();
       let handler_tx = handler_tx.clone();
       let (tx, rx) = channel::<Arc<Message>>();
 
       mioco::spawn(move || -> io::Result<()> {
-        let player = state::add_player(tx, &st);
+        let player = Arc::new(Player::new(tx));
+        try!(add_player(player.clone(), &handler_tx));
         if let Err(err) = controller::send(Arc::new(Message::new(MessageType::Welcome, "Welcome apprentice")), &player) {
           return Err(io_err(&format!("Failed sending welcome {}", err)));
         }
-        let res = handle_read(&mut conn, st.clone(), player.clone(), handler_tx);
+        let res = handle_read(&mut conn, player.clone(), &handler_tx);
         debug!("release handler coroutine");
         res
       });
@@ -94,6 +94,12 @@ fn start_listen(handler_tx : Arc<Mutex<Sender<HandlerParam>>>, server_state : Ar
       });
     }
   }).unwrap().unwrap();
+}
+
+fn add_player(player : Arc<Player>,
+  handler_tx : &Mutex<Sender<HandlerParam>>) -> io::Result<()>{
+  let tx = try!(map_io_err(handler_tx.lock()));
+  map_io_err(tx.send((HandlerMessage::AddPlayer, player)))
 }
 
 fn handle_write(conn : &mut MioAdapter<TcpStream>, rx: &Receiver<Arc<Message>>) -> io::Result<()> {
@@ -109,9 +115,8 @@ fn handle_write(conn : &mut MioAdapter<TcpStream>, rx: &Receiver<Arc<Message>>) 
 
 fn handle_read(
   conn : &mut MioAdapter<TcpStream>,
-  server_state : Arc<State>,
   player : Arc<Player>,
-  handler_tx : Arc<Mutex<Sender<HandlerParam>>>) -> io::Result<()> {
+  handler_tx : &Mutex<Sender<HandlerParam>>) -> io::Result<()> {
   let mut message_builder = MessageBuilder::new();
   let mut buf = [0u8; 1024];
 
@@ -119,9 +124,8 @@ fn handle_read(
     let size = try!(conn.read(&mut buf));
     if size == 0 {
       info!("break: left {}", player.id);
-      if let Err(err) = controller::release_player(&player, &server_state) {
-        error!("Failed releasing player {} caused by {}", player.id, err);
-      }
+      let tx = try!(map_io_err(handler_tx.lock()));
+      try!(map_io_err(tx.send((HandlerMessage::ReleasePlayer, player.clone()))));
       break;
     }
     let mut slice = &buf[0..size];
@@ -134,7 +138,7 @@ fn handle_read(
               trace!("message found {}, remaining {}", offset, slice.len());
               slice = &slice[offset..slice.len()];
               let tx = try!(map_io_err(handler_tx.lock()));
-              try!(map_io_err(tx.send((Arc::new(message), player.clone()))));
+              try!(map_io_err(tx.send((HandlerMessage::ClientMessage(Arc::new(message)), player.clone()))));
             },
             Left(mb) => {
               trace!("process no message continuing..");

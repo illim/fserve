@@ -5,16 +5,29 @@ use std::sync::Arc;
 use mioco::sync::{Mutex, RwLock};
 use mioco::sync::mpsc::Sender;
 use utils::*;
+use rand;
 
 pub type Id = u32;
 
 pub struct Player {
   pub id     : Id,
   pub tx     : Mutex<Sender<Arc<Message>>>,
-  pub state  : RwLock<Arc<PlayerState>>
+  pub state  : RwLock<Arc<PlayerState>> // this lock is quite uselsss as it is never read elsewhere than handler
 }
 
 impl Player {
+
+  pub fn new(tx : Sender<Arc<Message>>) -> Player {
+    Player {
+      id    : rand::random(),
+      tx    : Mutex::new(tx),
+      state : RwLock::new(Arc::new(
+        PlayerState {
+          status : PlayerStatus::OnHold,
+          name   : String::new()
+        }))
+    }
+  }
 
   pub fn set_name(&self, name : String) -> BasicResult<()> {
     self.update_state(move |state| {
@@ -166,6 +179,12 @@ impl Message  {
   pub fn body_as_str(&self) -> Result<&str, Utf8Error> {
     str::from_utf8(&self.body)
   }
+}
+
+pub enum HandlerMessage {
+  ClientMessage(Arc<Message>),
+  AddPlayer,
+  ReleasePlayer
 }
 
 pub struct MessageBuilder {
