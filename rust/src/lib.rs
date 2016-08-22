@@ -136,7 +136,7 @@ fn handle_read(
             Right((message, offset)) => {
               message_builder = MessageBuilder::new();
               trace!("message found {}, remaining {}", offset, slice.len());
-              slice = &slice[offset..slice.len()];
+              slice = try!(check_slice(&slice, offset, slice.len()));
               let tx = try!(map_io_err(handler_tx.lock()));
               try!(map_io_err(tx.send((HandlerMessage::ClientMessage(Arc::new(message)), player.clone()))));
             },
