@@ -19,13 +19,13 @@ use mioco::tcp::TcpListener;
 use mioco::MioAdapter;
 use mioco::sync::Mutex;
 use mioco::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
-use std::net::SocketAddr;
-
 use std::env;
-use std::str::FromStr;
 use std::io::prelude::*;
 use std::io;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::mpsc::TryRecvError;
+use std::str::FromStr;
 use std::thread;
 use model::*;
 use state::State;
@@ -112,12 +112,19 @@ fn add_player(player : Arc<Player>,
 }
 
 fn handle_write(conn : &mut MioAdapter<TcpStream>, rx: &Receiver<Arc<Message>>) -> io::Result<()> {
-  let msg = try!(map_io_err(rx.recv()));
-  let mut header = msg.header.to_string().into_bytes();
-  header.push(b'\n');
-  try!(conn.write_all(&header));
-  try!(conn.write_all(&msg.body));
-  debug!("Sent {:?}", msg.header);
+  match rx.try_recv() {
+    Ok(msg) => {
+      let mut header = msg.header.to_string().into_bytes();
+      header.push(b'\n');
+      try!(conn.write_all(&header));
+      try!(conn.write_all(&msg.body));
+      try!(conn.flush());
+      debug!("Sent {:?}", msg.header);
+
+    },
+    Err(TryRecvError::Empty) => debug!("Write handle: empty event"),
+    Err(TryRecvError::Disconnected) => debug!("Write handle: disconnected event"),
+  }
   Ok(())
 }
 
@@ -127,35 +134,37 @@ fn handle_read(
   mut message_builder : MessageBuilder,
   player : Arc<Player>,
   handler_tx : &Mutex<Sender<HandlerParam>>) -> io::Result<Option<MessageBuilder>> {
-  let size = try!(conn.read(&mut buf));
-  if size == 0 {
-    info!("Left {}", player.id);
-    let tx = try!(map_io_err(handler_tx.lock()));
-    try!(map_io_err(tx.send((HandlerMessage::ReleasePlayer, player.clone()))));
-    return Ok(None);
-  }
-  let mut slice = &buf[0..size];
-  loop {
-    match message_builder.process(slice) {
-      Ok(processed) =>
-        match processed {
-          Right((message, offset)) => {
-            message_builder = MessageBuilder::new();
-            trace!("message found {}, remaining {}", offset, slice.len());
-            slice = try!(check_slice(&slice, offset, slice.len()));
-            let tx = try!(map_io_err(handler_tx.lock()));
-            try!(map_io_err(tx.send((HandlerMessage::ClientMessage(Arc::new(message)), player.clone()))));
+  let size_option = try!(conn.try_read(&mut buf));
+  if let Some(size) = size_option {
+    if size == 0 {
+      info!("Left {}", player.id);
+      let tx = try!(map_io_err(handler_tx.lock()));
+      try!(map_io_err(tx.send((HandlerMessage::ReleasePlayer, player.clone()))));
+      return Ok(None);
+    }
+    let mut slice = &buf[0..size];
+    loop {
+      match message_builder.process(slice) {
+        Ok(processed) =>
+          match processed {
+            Right((message, offset)) => {
+              message_builder = MessageBuilder::new();
+              trace!("message found {}, remaining {}", offset, slice.len());
+              slice = try!(check_slice(&slice, offset, slice.len()));
+              let tx = try!(map_io_err(handler_tx.lock()));
+              try!(map_io_err(tx.send((HandlerMessage::ClientMessage(Arc::new(message)), player.clone()))));
+            },
+            Left(mb) => {
+              trace!("process no message continuing..");
+              message_builder = mb;
+              break;
+            }
           },
-          Left(mb) => {
-            trace!("process no message continuing..");
-            message_builder = mb;
-            break;
-          }
-        },
-      Err(err) => {
-        error!("Failed processing buffer {}", err);
-        message_builder = MessageBuilder::new();
-        break;
+        Err(err) => {
+          error!("Failed processing buffer {}", err);
+          message_builder = MessageBuilder::new();
+          break;
+        }
       }
     }
   }
