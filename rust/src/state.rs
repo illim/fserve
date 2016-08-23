@@ -6,6 +6,7 @@ use utils::*;
 
 type Players = Vec<Player>;
 
+#[derive(Debug)]
 pub struct State {
   pub players  : Vec<Arc<Player>>,
   pub requests : Vec<Request>

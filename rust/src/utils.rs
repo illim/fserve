@@ -22,4 +22,4 @@ pub fn check_slice<A>(buf : &[A], start : usize, end : usize) -> Result<&[A], io
   } else {
     Ok(&buf[start..end])
   }
-} 
+}

@@ -67,6 +67,7 @@ pub fn handle_msg(handler_msg : HandlerMessage, player : Arc<Player>, server_sta
           try!(exit_duel(&player));
           try!(broadcast_list_to_onhold(server_state))
         },
+        MessageType::Dump => info!("Dump :\n{:?}", server_state),
         _ => return Err(From::from(format!("Not managed msg type {}", msg.header.message_type)))
       }
     }

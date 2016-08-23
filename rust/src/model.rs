@@ -1,5 +1,6 @@
 use either::*;
 use std::error::Error;
+use std::fmt::{self, Debug, Formatter, Display};
 use std::str::{self, Utf8Error};
 use std::sync::Arc;
 use mioco::sync::{Mutex, RwLock};
@@ -67,13 +68,20 @@ impl Player {
   }
 }
 
-#[derive(Clone)]
+impl Debug for Player {
+  fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+    let s = format!("Player[{}, {:?}]", self.id, self.state);
+    Display::fmt(&s, f)
+  }
+}
+
+#[derive(Clone, Debug)]
 pub struct PlayerState {
   pub status : PlayerStatus,
   pub name   : String
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PlayerStatus {
   OnHold,
   Duelling(Duel)
@@ -93,6 +101,13 @@ impl Clone for Duel {
   }
 }
 
+impl Debug for Duel {
+  fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+    let s = format!("[{} vs {}]", self.player1.id, self.player2.id);
+    Display::fmt(&s, f)
+  }
+}
+
 impl Duel {
   
   pub fn other_player(&self, id : Id) -> Arc<Player> {
@@ -104,6 +119,7 @@ impl Duel {
   }
 }
 
+#[derive(Debug)]
 pub struct Request {
   pub src_id  : Id,
   pub dest_id : Id
@@ -128,6 +144,9 @@ pub mod MessageType {
   pub const ExitDuel     : Value = 6;
   #[allow(non_upper_case_globals)]
   pub const ListPlayers  : Value = 7;
+
+  #[allow(non_upper_case_globals)]
+  pub const Dump         : Value = 100;
 }
 
 #[derive(Debug)]
@@ -156,6 +175,7 @@ impl Header  {
   }
 }
 
+#[derive(Debug)]
 pub struct Message {
   pub header : Header,
   pub body   : Vec<u8>
