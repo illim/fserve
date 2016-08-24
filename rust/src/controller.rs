@@ -50,14 +50,18 @@ pub fn handle_msg(handler_msg : HandlerMessage, player : Arc<Player>, server_sta
           let state = try!(box_err(player.state.read()));
           match state.status {
             PlayerStatus::Duelling(ref duel) => try!(send_to_other(msg, duel, player.id)),
-            PlayerStatus::OnHold => try!(broadcast(msg, &server_state.players))
+            PlayerStatus::OnHold => {
+              let to_purge = try!(broadcast(msg, &server_state.players));
+              check_purge(server_state, to_purge)
+            }
           }
         },
         MessageType::Name => {
           let body = try!(msg.body_as_str());
           try!(player.set_name(body.to_string()));
           info!("Set name {} to {}", &body, player.id);
-          try!(broadcast_list_to_onhold(&server_state));
+          let to_purge = try!(broadcast_list_to_onhold(&server_state));
+          check_purge(server_state, to_purge);
         },
         MessageType::ListPlayers => {
           let player_list = try!(player_list_string(server_state));
@@ -65,7 +69,8 @@ pub fn handle_msg(handler_msg : HandlerMessage, player : Arc<Player>, server_sta
         },
         MessageType::ExitDuel => {
           try!(exit_duel(&player));
-          try!(broadcast_list_to_onhold(server_state))
+          let to_purge = try!(broadcast_list_to_onhold(server_state));
+          check_purge(server_state, to_purge)
         },
         MessageType::Dump => info!("Dump :\n{:?}", server_state),
         _ => return Err(From::from(format!("Not managed msg type {}", msg.header.message_type)))
@@ -126,15 +131,18 @@ pub fn release_player(player : &Player, server_state : &mut State) -> BasicResul
   }
   try!(exit_duel(player));
   server_state.purge_request(player.id);
-  broadcast_list_to_onhold(server_state)
+  if let Err(err) = broadcast_list_to_onhold(server_state) {
+    error!("Failed broadcasting release of {} : {}", player.id, err);
+  }
+  Ok(())
 }
 
-fn broadcast_list_to_onhold(server_state: &State) -> BasicResult<()> {
+fn broadcast_list_to_onhold(server_state: &State) -> BasicResult<Vec<Id>> {
   let p = try!(player_list_string(server_state));
   broadcast_to_onhold(Arc::new(Message::new(MessageType::ListPlayers, &p)), &server_state)
 }
 
-fn broadcast_to_onhold(msg : Arc<Message>, server_state: &State) -> BasicResult<()> {
+fn broadcast_to_onhold(msg : Arc<Message>, server_state: &State) -> BasicResult<Vec<Id>> {
   let players_on_hold :Vec<Arc<Player>> = server_state.players.iter()
     .filter(|p| p.is_on_hold_unsafe())
     .map(|p| p.clone())
@@ -142,10 +150,35 @@ fn broadcast_to_onhold(msg : Arc<Message>, server_state: &State) -> BasicResult<
   broadcast(msg, &players_on_hold)
 }
 
-pub fn broadcast(msg : Arc<Message>, players : &Vec<Arc<Player>>) -> BasicResult<()> {
-  for player in players.iter() {
-    let tx = try!(box_err(player.tx.lock()));
-    try!(tx.send(msg.clone()));
+// return the list of players when send fails
+pub fn broadcast(msg : Arc<Message>, players : &Vec<Arc<Player>>) -> BasicResult<Vec<Id>> {
+  Ok(
+    players.iter()
+      .filter_map(|player| {
+        if let Ok(tx) = box_err(player.tx.lock()) {
+          tx.send(msg.clone()).err().map(|e|{
+            error!("Failed sending to {} : {}", player.id, e);
+            player.id
+          })
+        } else {
+          error!("Failed to lock on tx of player {}" , player.id); // FIXME should return? should be Some(player.id)?
+          None
+        }
+      })
+      .collect())
+}
+
+pub fn check_purge(server_state : &mut State, player_ids : Vec<Id>) -> () {
+  if ! player_ids.is_empty() {
+    for player_id in player_ids.iter() {
+      let player_option = server_state.players.iter()
+        .find(|p| p.id == *player_id)
+        .map( |p| p.clone());
+      if let Some(p) = player_option {
+        if let Err(err) = release_player(&p, server_state) {
+          error!("Failed release player {}: {}", player_id, err);
+        } 
+      }
+    }
   }
-  Ok(())
 }
