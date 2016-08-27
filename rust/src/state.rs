@@ -36,6 +36,21 @@ impl State {
       req.src_id != id && req.dest_id != id 
     });
   }
+
+  pub fn player_list_string(&self) -> BasicResult<String> {
+    let player_strings : Vec<String> = self.players.iter()
+      .filter_map(|player| {
+        match player_string(&player) { // FIXME
+          Ok(name) => name,
+          Err(err) => {
+            warn!("Failed getting name {}", err); 
+            None
+          }
+        }
+      })
+      .collect();
+    Ok(player_strings.join(";"))
+  }
 }
 
 pub fn find_player_on_hold(id : Id, state : &State) -> Option<Arc<Player>> {
@@ -44,20 +59,6 @@ pub fn find_player_on_hold(id : Id, state : &State) -> Option<Arc<Player>> {
     .map(|p| p.clone())
 }
 
-pub fn player_list_string(state : &State) -> BasicResult<String> {
-  let player_strings : Vec<String> = state.players.iter()
-    .filter_map(|player| {
-      match player_string(&player) { // FIXME
-        Ok(name) => name,
-        Err(err) => {
-          warn!("Failed getting name {}", err); 
-          None
-        }
-      }
-    })
-    .collect();
-  Ok(player_strings.join(";"))
-}
 
 fn player_string(player : &Player) -> BasicResult<Option<String>> {
   let state = try!(box_err(player.state.read()));

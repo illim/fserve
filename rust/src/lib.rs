@@ -7,9 +7,11 @@ extern crate mio;
 #[macro_use] extern crate mioco;
 extern crate rand;
 extern crate base64;
+extern crate time;
 
 mod controller;
 mod model;
+mod messagebuilder;
 mod state;
 mod utils;
 
@@ -20,6 +22,8 @@ use mioco::MioAdapter;
 use mioco::sync::Mutex;
 use mioco::sync::mpsc::{channel, Receiver, Sender};
 use std::env;
+use log::{LogRecord, LogLevelFilter};
+use env_logger::LogBuilder;
 use std::io::prelude::*;
 use std::io;
 use std::net::SocketAddr;
@@ -27,6 +31,8 @@ use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
 use std::str::FromStr;
 use std::thread;
+use messagebuilder::*;
+use controller::HandlerMessage;
 use model::*;
 use state::State;
 use utils::*;
@@ -41,7 +47,7 @@ fn listend_addr() -> SocketAddr {
 }
 
 pub fn run_server() {
-  env_logger::init().unwrap();
+  init_logger();
   let (handler_tx, handler_rx) = channel::<HandlerParam>();
 
   start_handler(handler_rx);
@@ -106,7 +112,7 @@ fn start_listen(handler_tx : Arc<Mutex<Sender<HandlerParam>>>) {
 }
 
 fn add_player(player : Arc<Player>,
-  handler_tx : &Mutex<Sender<HandlerParam>>) -> io::Result<()>{
+    handler_tx : &Mutex<Sender<HandlerParam>>) -> io::Result<()> {
   let tx = try!(map_io_err(handler_tx.lock()));
   map_io_err(tx.send((HandlerMessage::AddPlayer, player)))
 }
@@ -129,11 +135,11 @@ fn handle_write(conn : &mut MioAdapter<TcpStream>, rx: &Receiver<Arc<Message>>) 
 }
 
 fn handle_read(
-  conn : &mut MioAdapter<TcpStream>,
-  mut buf : &mut [u8],
-  mut message_builder : MessageBuilder,
-  player : Arc<Player>,
-  handler_tx : &Mutex<Sender<HandlerParam>>) -> io::Result<Option<MessageBuilder>> {
+    conn : &mut MioAdapter<TcpStream>,
+    mut buf : &mut [u8],
+    mut message_builder : MessageBuilder,
+    player : Arc<Player>,
+    handler_tx : &Mutex<Sender<HandlerParam>>) -> io::Result<Option<MessageBuilder>> {
   let size_option = try!(conn.try_read(&mut buf));
   if let Some(size) = size_option {
     if size == 0 {
@@ -169,4 +175,25 @@ fn handle_read(
     }
   }
   Ok(Some(message_builder))
+}
+
+fn init_logger() {
+  let format = |record: &LogRecord| {
+    format!("{} - {} {} {}",
+      time::strftime("%Y-%m-%d %H:%M:%S %Z", &time::now()).unwrap(),  
+      record.level(),
+      record.location().module_path(),
+      record.args())
+  };
+  let mut builder = LogBuilder::new();
+
+  builder
+    .format(format)
+    .filter(None, LogLevelFilter::Info);
+
+  if env::var("RUST_LOG").is_ok() {
+    builder.parse(&env::var("RUST_LOG").unwrap());
+  }
+
+  builder.init().unwrap();
 }

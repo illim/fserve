@@ -2,15 +2,20 @@
 use std::sync::Arc;
 use rand::{thread_rng, sample};
 use model::*;
-use model::HandlerMessage::*;
 use state::*;
 use utils::*;
 
+pub enum HandlerMessage {
+  ClientMessage(Arc<Message>),
+  AddPlayer,
+  ReleasePlayer
+}
+
 pub fn handle_msg(handler_msg : HandlerMessage, player : Arc<Player>, server_state : &mut State) -> BasicResult<()> {
   match handler_msg {
-    AddPlayer => server_state.players.push(player),
-    ReleasePlayer => try!(release_player(&player, server_state)),
-    ClientMessage(msg) => {
+    HandlerMessage::AddPlayer => server_state.players.push(player),
+    HandlerMessage::ReleasePlayer => try!(release_player(&player, server_state)),
+    HandlerMessage::ClientMessage(msg) => {
       debug!("msg type {} -> {}", msg.header.message_type, player.id);
       match msg.header.message_type {
         MessageType::RequestDuel => {
@@ -64,7 +69,7 @@ pub fn handle_msg(handler_msg : HandlerMessage, player : Arc<Player>, server_sta
           check_purge(server_state, to_purge);
         },
         MessageType::ListPlayers => {
-          let player_list = try!(player_list_string(server_state));
+          let player_list = try!(server_state.player_list_string());
           try!(answer(Message::new(MessageType::ListPlayers, &player_list), &player, msg))
         },
         MessageType::ExitDuel => {
@@ -138,7 +143,7 @@ pub fn release_player(player : &Player, server_state : &mut State) -> BasicResul
 }
 
 fn broadcast_list_to_onhold(server_state: &State) -> BasicResult<Vec<Id>> {
-  let p = try!(player_list_string(server_state));
+  let p = try!(server_state.player_list_string());
   broadcast_to_onhold(Arc::new(Message::new(MessageType::ListPlayers, &p)), &server_state)
 }
 
@@ -169,16 +174,14 @@ pub fn broadcast(msg : Arc<Message>, players : &Vec<Arc<Player>>) -> BasicResult
 }
 
 pub fn check_purge(server_state : &mut State, player_ids : Vec<Id>) -> () {
-  if ! player_ids.is_empty() {
-    for player_id in player_ids.iter() {
-      let player_option = server_state.players.iter()
-        .find(|p| p.id == *player_id)
-        .map( |p| p.clone());
-      if let Some(p) = player_option {
-        if let Err(err) = release_player(&p, server_state) {
-          error!("Failed release player {}: {}", player_id, err);
-        } 
-      }
+  for player_id in player_ids.iter() {
+    let player_option = server_state.players.iter()
+      .find(|p| p.id == *player_id)
+      .map( |p| p.clone());
+    if let Some(p) = player_option {
+      if let Err(err) = release_player(&p, server_state) {
+        error!("Failed release player {}: {}", player_id, err);
+      } 
     }
   }
 }
